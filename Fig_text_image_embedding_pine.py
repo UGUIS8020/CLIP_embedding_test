@@ -1,5 +1,6 @@
 import os
 import re
+import glob
 import numpy as np
 import openai
 import pinecone
@@ -69,11 +70,37 @@ def get_image_embedding(image_path, model, preprocess, device):
     try:
         image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
         with torch.no_grad():
-            image_embedding = model.encode_image(image).cpu().numpy().flatten()
-        return image_embedding
+            image_embedding = model.encode_image(image)
+        image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
+        # 512次元を1536次元に拡張
+        vector = image_embedding.cpu().numpy().tolist()[0]
+        expanded_vector = np.concatenate([vector, np.zeros(1536-len(vector))]).tolist()
+        return {
+            "vector": expanded_vector,
+            "model": "open_clip",
+            "status": "success"
+        }
     except Exception as e:
         print(f"画像エンベディングエラー: {e}")
-        return np.zeros(512)  # None の代わりにゼロベクトルを返す
+        return {
+            "vector": [0.0] * 1536,  # 1536次元のゼロベクトル
+            "model": "open_clip",
+            "status": "error",
+            "error_message": str(e)
+        }
+
+# 512次元ベクトルを 1536次元に拡張（ゼロ埋め）
+def expand_embedding(embedding_dict, target_dim=1536):
+    vector = embedding_dict["vector"]
+    extra_dims = target_dim - len(vector)
+    expanded_vector = np.concatenate([vector, np.zeros(extra_dims)]).tolist()
+    
+    return {
+        "vector": expanded_vector,
+        "original_dim": len(vector),
+        "model": embedding_dict["model"],
+        "status": embedding_dict["status"]
+    }
 
 def get_text_embedding(text, client, chunk_size=1000, chunk_overlap=200):
     if isinstance(text, dict):
@@ -109,45 +136,70 @@ def get_text_embedding(text, client, chunk_size=1000, chunk_overlap=200):
 
 def main():
     try:
-        # サービスの初期化
         client, index, model, preprocess, device = initialize_services()
         
-        file_path = "data/chapter2_test.txt"
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"ファイルが見つかりません: {file_path}")
+        txt_files = glob.glob("data/*.txt")
+        if not txt_files:
+            raise FileNotFoundError("data ディレクトリにtxtファイルが見つかりません")
         
-        fig_texts = extract_fig_texts(file_path)
-        print(f"{len(fig_texts)}個の [FigX] 説明文を取得")
+        all_fig_texts = {}
+        for file_path in txt_files:
+            fig_texts = extract_fig_texts(file_path)
+            all_fig_texts.update(fig_texts)
+            print(f"{file_path}: {len(fig_texts)}個の [FigX] 説明文を取得")
 
-        # テキストとイメージの埋め込みを処理
-        embeddings = {}
-        for fig, text in fig_texts.items():
+        vectors_to_upsert = []
+        for fig, text in all_fig_texts.items():
+            # ベース名を取得（例：Fig1）
+            base_id = fig  # 既にFig1などの形式
+
+            # テキストのembedding取得とアップロード
             text_emb = get_text_embedding(text, client)
+            vectors_to_upsert.append((
+                base_id,  # Fig1
+                text_emb,
+                {
+                    "type": "text",
+                    "text": text,
+                    "related_image": f"{base_id}.jpg",  # Fig1.jpg
+                    "category": "dental",  
+                    "chapter": "chapter2",  # 章の情報を追加
+                    "chapter_title": "歯と歯周組織の発生と解剖",  # 章タイトル
+                    "fig_id": f"{base_name}_{base_id}"  # 例: chapter2_Fig1                  
+                }
+            ))
             
-            image_path = f"data/{fig}.jpg"
+             # 画像の処理
+            image_path = f"data/{base_id}.jpg"
             if os.path.exists(image_path):
-                image_emb = get_image_embedding(image_path, model, preprocess, device)
-                image_emb = np.tile(image_emb, 1536 // len(image_emb))
-            else:
-                image_emb = np.zeros(1536)
-            
-            embeddings[fig] = np.mean([text_emb, image_emb], axis=0).tolist()
+                image_result = get_image_embedding(image_path, model, preprocess, device)
+                if image_result["status"] == "success":
+                    image_emb = image_result["vector"]
+                    vectors_to_upsert.append((
+                        f"{base_id}.jpg",  # Fig1.jpg
+                        image_emb,
+                        {
+                            "type": "image",
+                            "text": text,
+                            "related_text": base_id,  # Fig1
+                            "category": "dental", 
+                            "chapter_title": "歯と歯周組織の発生と解剖",
+                            "fig_id": f"{base_name}_{base_id}"                           
+                        }
+                    ))
+            print(f"- {fig}の処理完了")
 
-        # Pineconeへのアップロード
-        to_upsert = [
-            (fig, vector, {"text": fig_texts[fig]})
-            for fig, vector in embeddings.items()
-            if not np.allclose(vector, np.zeros_like(vector))
-        ]
-
-        if to_upsert:
-            index.upsert(vectors=to_upsert)
-            print("Pineconeにデータを保存しました（1536次元で統一済み）")
+        if vectors_to_upsert:
+            try:
+                index.upsert(vectors=vectors_to_upsert)
+                print(f"\n{len(vectors_to_upsert)}個のベクトルをPineconeに保存しました")
+            except Exception as e:
+                print(f"\nPineconeへの保存中にエラーが発生: {e}")
         else:
-            print("アップロードするデータがありません")
+            print("\nアップロードするデータがありません")
 
     except Exception as e:
-        print(f"処理中にエラーが発生しました: {e}")
+        print(f"\n処理中にエラーが発生: {e}")
         print(traceback.format_exc())
 
 if __name__ == "__main__":
