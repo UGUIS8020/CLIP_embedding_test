@@ -100,11 +100,12 @@ def main():
 
                 base_filename = os.path.splitext(filename)[0]
                 
-                metadata = {                    
+                metadata = { 
+                    "data_type": "text",                   
                     "chunk_index": i,
                     "summary": summary,
-                    "text": chunk,                    
-                    "data_type": "text_content",                    
+                    "text": chunk                    
+                                        
                 }                
 
                 doc_id = f"{base_filename}_{i:03d}"

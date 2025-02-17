@@ -15,16 +15,47 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 # 環境変数をロード
 load_dotenv()
 
-# 環境変数の検証
 def extract_fig_texts(file_path):
-    """テキストから [FigX] の説明を抽出"""
+    """テキストから [FigX] の説明を抽出し、ファイル名を考慮したIDを生成"""
     try:
+        base_filename = os.path.splitext(os.path.basename(file_path))[0]
+        
         with open(file_path, "r", encoding="utf-8") as f:
             text_data = f.read()
         
         pattern = r"\[Fig(\d+[a-z]?)\]\s*(.*?)(?=\n\[Fig|$)"
         matches = re.findall(pattern, text_data, re.DOTALL)
-        return {f"Fig{num}": desc.strip() for num, desc in matches}
+        
+        result = {}
+        for i, (num, desc) in enumerate(matches, 1):
+            # ベースIDを生成
+            base_id = f"{base_filename}_{i:03d}_Fig{num}"
+            # テキストとイメージのIDを生成
+            text_id = f"{base_id}_text"
+            image_id = f"{base_id}_image"
+            
+            result[base_id] = {
+                "text": desc.strip(),
+                "text_id": text_id,
+                "image_id": image_id
+            }
+            
+        return result
+
+    except Exception as e:
+        print(f"テキスト抽出エラー: {e}")
+        print(traceback.format_exc())
+        return {}
+
+    except Exception as e:
+        print(f"テキスト抽出エラー: {e}")
+        print(traceback.format_exc())
+        return {}
+
+    except Exception as e:
+        print(f"テキスト抽出エラー: {e}")
+        print(traceback.format_exc())
+        return {}
 
     except Exception as e:
         print(f"テキスト抽出エラー: {e}")
@@ -46,7 +77,7 @@ def initialize_services():
     env_vars = validate_environment()
     client = openai.OpenAI(api_key=env_vars["OPENAI_API_KEY"])
     pc = Pinecone(api_key=env_vars["PINECONE_API_KEY"])
-    index = pc.Index("text-search")
+    index = pc.Index("raiden")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     returned_values = open_clip.create_model_and_transforms(
@@ -149,45 +180,50 @@ def main():
             print(f"{file_path}: {len(fig_texts)}個の [FigX] 説明文を取得")
 
         vectors_to_upsert = []
-        for fig, text in all_fig_texts.items():
-            # ベース名を取得（例：Fig1）
-            base_id = fig  # 既にFig1などの形式
-
+        for base_id, data in all_fig_texts.items():
             # テキストのembedding取得とアップロード
-            text_emb = get_text_embedding(text, client)
+            text_emb = get_text_embedding(data["text"], client)
             vectors_to_upsert.append((
-                base_id,  # Fig1
+                data["text_id"],  # テキスト用の一意のID
                 text_emb,
                 {
-                    "type": "text",
-                    "text": text,
-                    "related_image": f"{base_id}.jpg",  # Fig1.jpg
-                    "category": "dental",  
-                    "chapter": "chapter2",  # 章の情報を追加
-                    "chapter_title": "歯と歯周組織の発生と解剖",  # 章タイトル
-                    "fig_id": f"{base_name}_{base_id}"  # 例: chapter2_Fig1                  
+                    "data_type": "text",
+                    "text": data["text"],
+                    "related_image_id": data["image_id"],                   
+                    "category": "dental"
+                    
                 }
             ))
             
-             # 画像の処理
-            image_path = f"data/{base_id}.jpg"
-            if os.path.exists(image_path):
-                image_result = get_image_embedding(image_path, model, preprocess, device)
-                if image_result["status"] == "success":
-                    image_emb = image_result["vector"]
-                    vectors_to_upsert.append((
-                        f"{base_id}.jpg",  # Fig1.jpg
-                        image_emb,
-                        {
-                            "type": "image",
-                            "text": text,
-                            "related_text": base_id,  # Fig1
-                            "category": "dental", 
-                            "chapter_title": "歯と歯周組織の発生と解剖",
-                            "fig_id": f"{base_name}_{base_id}"                           
-                        }
-                    ))
-            print(f"- {fig}の処理完了")
+            # 画像の処理
+            fig_match = re.search(r'(Fig\d+[a-z]?)', base_id)
+            if fig_match:
+                fig_number = fig_match.group(1)
+                # base_idからテキストファイル名部分を抽出（_Figの前まで）
+                text_file_part = base_id.split('_Fig')[0]
+                image_path = f"data/{fig_number}.jpg"  # 元の画像パス
+                
+                print(f"画像パスを確認: {image_path}")
+                
+                if os.path.exists(image_path):
+                    print(f"画像ファイルが見つかりました: {image_path}")
+                    image_result = get_image_embedding(image_path, model, preprocess, device)
+                    if image_result["status"] == "success":
+                        image_emb = image_result["vector"]
+                        image_id = f"{text_file_part}_{fig_number}_image"  # 新しい画像ID形式
+                        vectors_to_upsert.append((
+                            image_id,  # 新しい形式のID
+                            image_emb,
+                            {
+                                "data_type": "image",
+                                "text": data["text"],
+                                "related_text_id": data["text_id"],                                
+                                "category": "dental"
+                            }
+                        ))
+                else:
+                    print(f"画像ファイルが見つかりません: {image_path}")
+            print(f"- {base_id}の処理完了")
 
         if vectors_to_upsert:
             try:
