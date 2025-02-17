@@ -1,3 +1,6 @@
+"""[fig]を取り除きテキストembeddingしpineconeにuploadする
+summaryを生成し、metadataとして追加する"""
+
 import os
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -6,14 +9,12 @@ from langchain.schema.runnable import RunnablePassthrough
 from pinecone import Pinecone, ServerlessSpec
 from dotenv import load_dotenv
 
-"""pineconeにテキストデータと画像データを紐づけして保存する"""
-
 source_name = os.getenv('SOURCE_NAME', 'autologous tooth transplantation')
 
 load_dotenv()
 pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
 
-index_name = "text-search"
+index_name = "raiden"
 if index_name not in pc.list_indexes().names():
     pc.create_index(
         name=index_name,
@@ -54,9 +55,26 @@ def generate_summary(text):
         print(f"Error generating summary: {e}")
         return ""
     
+# def process_text(text_file_path):
+#     with open(text_file_path, 'r', encoding='utf-8') as f:
+#         return f.read()
+
+def extract_main_text(text):
+    """テキストから本文を抽出（[Fig]より前の部分）
+    [Fig]が存在しない場合は全文を返す"""
+    if '[Fig' in text:
+        return text.split('[Fig')[0].strip()
+    return text.strip()
+    
 def process_text(text_file_path):
-    with open(text_file_path, 'r', encoding='utf-8') as f:
-        return f.read()
+    try:
+        with open(text_file_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+            # extract_main_text関数を使用して[Fig]前の部分を抽出
+            return extract_main_text(text)
+    except Exception as e:
+        print(f"テキスト抽出エラー: {e}")
+        return ""
     
 def split_text(text):
     text_splitter = RecursiveCharacterTextSplitter(
@@ -79,18 +97,19 @@ def main():
             for i, chunk in enumerate(chunks):
                 summary = generate_summary(chunk)
                 vector = embedding_model.embed_query(chunk)
+
+                base_filename = os.path.splitext(filename)[0]
                 
-                metadata = {
-                    "filename": SHIBUYA,
+                metadata = {                    
                     "chunk_index": i,
-                    "text": chunk,
                     "summary": summary,
+                    "text": chunk,                    
                     "data_type": "text_content",                    
-                }
-                
-                doc_id = f"text_{filename}_{i}"
+                }                
+
+                doc_id = f"{base_filename}_{i:03d}"
                 index.upsert([(doc_id, vector, metadata)])
-                print(f"Processed chunk {i} of {filename}")
+                print(f"Processed chunk {i} of {base_filename}")
 
 if __name__ == "__main__":
     main()
