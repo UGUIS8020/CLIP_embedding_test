@@ -187,10 +187,11 @@ def main():
                 data["text_id"],  # テキスト用の一意のID
                 text_emb,
                 {
+                    "category": "dental",
                     "data_type": "text",
                     "text": data["text"],
-                    "related_image_id": data["image_id"],                   
-                    "category": "dental"
+                    "related_image_id": data["image_id"]                
+                    
                     
                 }
             ))
@@ -215,10 +216,11 @@ def main():
                             image_id,  # 新しい形式のID
                             image_emb,
                             {
+                                "category": "dental",
                                 "data_type": "image",
                                 "text": data["text"],
-                                "related_text_id": data["text_id"],                                
-                                "category": "dental"
+                                "related_text_id": data["text_id"]                         
+                               
                             }
                         ))
                 else:

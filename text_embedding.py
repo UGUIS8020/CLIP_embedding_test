@@ -101,8 +101,8 @@ def main():
                 base_filename = os.path.splitext(filename)[0]
                 
                 metadata = { 
-                    "data_type": "text",                   
-                    "chunk_index": i,
+                    "category": "dental",
+                    "data_type": "text",                     
                     "summary": summary,
                     "text": chunk                    
                                         
