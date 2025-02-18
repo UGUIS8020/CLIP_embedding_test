@@ -15,6 +15,7 @@ load_dotenv()
 pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
 
 index_name = "raiden"
+
 if index_name not in pc.list_indexes().names():
     pc.create_index(
         name=index_name,
@@ -110,7 +111,7 @@ def main():
 
                 doc_id = f"{base_filename}_{i:03d}"
                 index.upsert([(doc_id, vector, metadata)])
-                print(f"Processed chunk {i} of {base_filename}")
+                print(f"Uploaded {doc_id} to Pinecone")
 
 if __name__ == "__main__":
     main()
